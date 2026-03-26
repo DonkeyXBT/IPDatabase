@@ -9,12 +9,17 @@ const HostManager = {
             const hostType = HOST_TYPES.find(t => t.id === host.hostType) || HOST_TYPES[0] || { id: 'vm', name: 'Virtual Machine', icon: '💻' };
             return {
                 ...host,
-                ipAddresses: hostIPs.map(ip => ip.ipAddress).join(', '),
+                ipAddresses: [...hostIPs.map(ip => ip.ipAddress), ...((Array.isArray(host.ipv6Addresses) ? host.ipv6Addresses : []))].join(', '),
                 companyName: company ? company.name : 'Unassigned',
                 companyColor: company ? company.color : '#6b7280',
                 hostTypeName: hostType.name,
                 hostTypeIcon: hostType.icon,
-                hostTypeColor: hostType.color
+                hostTypeColor: hostType.color,
+                tags: Array.isArray(host.tags) ? host.tags : [],
+                customFields: host.customFields || {},
+                dependencies: Array.isArray(host.dependencies) ? host.dependencies : [],
+                serviceName: host.serviceName || '',
+                ipv6Addresses: Array.isArray(host.ipv6Addresses) ? host.ipv6Addresses : []
             };
         });
     },
@@ -29,12 +34,17 @@ const HostManager = {
         const hostType = HOST_TYPES.find(t => t.id === host.hostType) || HOST_TYPES[0] || { id: 'vm', name: 'Virtual Machine', icon: '💻' };
         return {
             ...host,
-            ipAddresses: hostIPs.map(ip => ip.ipAddress).join(', '),
+            ipAddresses: [...hostIPs.map(ip => ip.ipAddress), ...((Array.isArray(host.ipv6Addresses) ? host.ipv6Addresses : []))].join(', '),
             companyName: company ? company.name : 'Unassigned',
             companyColor: company ? company.color : '#6b7280',
             hostTypeName: hostType.name,
             hostTypeIcon: hostType.icon,
-            hostTypeColor: hostType.color
+            hostTypeColor: hostType.color,
+            tags: Array.isArray(host.tags) ? host.tags : [],
+            customFields: host.customFields || {},
+            dependencies: Array.isArray(host.dependencies) ? host.dependencies : [],
+            serviceName: host.serviceName || '',
+            ipv6Addresses: Array.isArray(host.ipv6Addresses) ? host.ipv6Addresses : []
         };
     },
     getByVMName(vmName) {
@@ -68,6 +78,14 @@ const HostManager = {
             model: data.model || '',
             assetTag: data.assetTag || '',
             location: data.location || '',
+            locationId: data.locationId || null,
+            uPosition: parseInt(data.uPosition, 10) || null,
+            uHeight: parseInt(data.uHeight, 10) || 1,
+            serviceName: data.serviceName || '',
+            ipv6Addresses: Array.isArray(data.ipv6Addresses) ? data.ipv6Addresses : [],
+            tags: Array.isArray(data.tags) ? data.tags : [],
+            customFields: data.customFields || {},
+            dependencies: Array.isArray(data.dependencies) ? data.dependencies : [],
             createdAt: new Date().toISOString()
         };
         hosts.push(newHost);
@@ -108,6 +126,12 @@ const HostManager = {
         if (updates.diskSizeGB !== undefined) updates.diskSizeGB = parseFloat(updates.diskSizeGB) || null;
         if (updates.diskUsedGB !== undefined) updates.diskUsedGB = parseFloat(updates.diskUsedGB) || null;
         if (updates.cpuCount !== undefined) updates.cpuCount = parseInt(updates.cpuCount) || null;
+        if (updates.uPosition !== undefined) updates.uPosition = parseInt(updates.uPosition, 10) || null;
+        if (updates.uHeight !== undefined) updates.uHeight = parseInt(updates.uHeight, 10) || 1;
+        if (updates.tags !== undefined && !Array.isArray(updates.tags)) updates.tags = [];
+        if (updates.ipv6Addresses !== undefined && !Array.isArray(updates.ipv6Addresses)) updates.ipv6Addresses = [];
+        if (updates.customFields !== undefined && typeof updates.customFields !== 'object') updates.customFields = {};
+        if (updates.dependencies !== undefined && !Array.isArray(updates.dependencies)) updates.dependencies = [];
         hosts[index] = { ...hosts[index], ...updates, updatedAt: new Date().toISOString() };
         DB.set(DB.KEYS.HOSTS, hosts);
         AuditLog.log('update', 'host', id,

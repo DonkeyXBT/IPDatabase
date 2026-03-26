@@ -52,6 +52,7 @@ const DB = {
 
     _jsonColumns: {
         'subnet_templates': ['ranges', 'reservations'],
+        'hosts': ['ipv6Addresses', 'tags', 'customFields', 'dependencies'],
         'maintenance_windows': ['hostIds', 'subnetIds'],
         'saved_filters': ['filters'],
         'audit_log': ['oldValue', 'newValue']
@@ -154,6 +155,11 @@ const DB = {
             locationId TEXT,
             uPosition INTEGER,
             uHeight INTEGER,
+            serviceName TEXT,
+            ipv6Addresses TEXT,
+            tags TEXT,
+            customFields TEXT,
+            dependencies TEXT,
             createdAt TEXT,
             updatedAt TEXT
         )`,
@@ -358,11 +364,13 @@ const DB = {
             if (savedData) {
                 this._db = new SQL.Database(savedData);
                 this._createTables();
+                this._runMigrations();
                 this._storageBackend = 'sqlite+idb';
                 console.log('OpenIPAM: SQLite loaded from IndexedDB');
             } else {
                 this._db = new SQL.Database();
                 this._createTables();
+                this._runMigrations();
                 this._storageBackend = idbAvailable ? 'sqlite+idb' : 'sqlite+localstorage';
                 const migrated = this._migrateFromLocalStorage();
                 if (migrated) {
@@ -491,6 +499,26 @@ const DB = {
     _createTables() {
         for (const sql of this._createTableSQL) {
             this._db.run(sql);
+        }
+    },
+
+    _runMigrations() {
+        this._ensureColumn('hosts', 'serviceName', 'TEXT');
+        this._ensureColumn('hosts', 'ipv6Addresses', 'TEXT');
+        this._ensureColumn('hosts', 'tags', 'TEXT');
+        this._ensureColumn('hosts', 'customFields', 'TEXT');
+        this._ensureColumn('hosts', 'dependencies', 'TEXT');
+    },
+
+    _ensureColumn(table, columnName, columnType) {
+        try {
+            const results = this._db.exec(`PRAGMA table_info(${table})`);
+            const columns = results[0]?.values.map(row => row[1]) || [];
+            if (!columns.includes(columnName)) {
+                this._db.run(`ALTER TABLE ${table} ADD COLUMN ${columnName} ${columnType}`);
+            }
+        } catch (e) {
+            console.error(`DB migration failed for ${table}.${columnName}:`, e);
         }
     },
 

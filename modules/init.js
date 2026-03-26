@@ -61,10 +61,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     KeyboardShortcuts.init();
     ContextMenu.init();
     initGlobalSearch();
-
-    refreshDashboard();
+    const initialPage = getPageForRoute(window.location.pathname);
+    navigateTo(initialPage, { updateHistory: false, replaceHistory: true });
     refreshConflictsPanel();
     console.log('OpenIPAM v7.0 initialized (SQLite)');
+});
+
+window.addEventListener('popstate', () => {
+    navigateTo(getPageForRoute(window.location.pathname), { updateHistory: false });
 });
 
 document.querySelectorAll('.nav-item').forEach(item => {

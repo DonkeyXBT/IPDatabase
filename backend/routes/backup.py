@@ -31,6 +31,7 @@ TABLE_NAME_TO_KEY = {v: k for k, v in TABLES.items()}
 JSON_FIELDS = {
     'subnet_templates': ['ranges', 'reservations'],
     'maintenance_windows': ['hostIds', 'subnetIds'],
+    'hosts': ['ipv6Addresses', 'tags', 'customFields', 'dependencies'],
     'audit_log': ['oldValue', 'newValue'],
     'saved_filters': ['filters'],
 }

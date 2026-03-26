@@ -172,6 +172,14 @@
                         </svg>
                         <span>Activity Log</span>
                     </li>
+                    <li class="nav-item" data-page="alerts">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        <span>Alerts</span>
+                    </li>
                     <li class="nav-item" data-page="import">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
@@ -714,12 +722,29 @@
                             <h3>Import from CSV</h3>
                         </div>
                         <div class="card-body">
-                            <p class="help-text">Import hosts from a CSV file. Select a company to assign imported hosts to.</p>
                             <div class="form-group">
+                                <label>Import Type</label>
+                                <select id="importEntity" onchange="updateImportEntityUI()">
+                                    <option value="hosts">Hosts</option>
+                                    <option value="companies">Companies</option>
+                                    <option value="subnets">Subnets</option>
+                                    <option value="vlans">VLANs</option>
+                                    <option value="locations">Locations</option>
+                                    <option value="dhcpScopes">DHCP Scopes</option>
+                                    <option value="ipRanges">IP Ranges</option>
+                                </select>
+                            </div>
+                            <p class="help-text" id="importDescription">Import or update hosts and their IP assignments.</p>
+                            <button type="button" class="btn-secondary import-template-btn" onclick="downloadCSVTemplate()">
+                                Download Empty CSV Template
+                            </button>
+                            <p class="help-text">Use this if you do not have a CSV yet. The downloaded file includes the right import columns for the selected import type.</p>
+                            <div class="form-group" id="importCompanyGroup">
                                 <label>Assign to Company</label>
                                 <select id="importCompany">
                                     <option value="">-- No Company --</option>
                                 </select>
+                                <span class="help-text">Used for host imports when the CSV does not specify a company.</span>
                             </div>
                             <div class="file-upload-area" id="dropZone">
                                 <input type="file" id="csvFileInput" accept=".csv" onchange="handleFileSelect(event)">
@@ -737,13 +762,14 @@
                                 <label class="checkbox-label">
                                     <input type="checkbox" id="updateExisting" checked>
                                     <span class="checkmark"></span>
-                                    Update existing hosts if found
+                                    Update existing records if found
                                 </label>
                             </div>
                             <div id="importStatus" class="import-status"></div>
+                            <div id="importPreview" class="import-preview"></div>
                             <details class="csv-format-details">
                                 <summary>View expected CSV format</summary>
-                                <code class="csv-format">Operating System, Memory Used (GB), Memory Available (GB), VM Name, Node, Disk Size (GB), State, CPU Count, Disk Used (GB), Memory Total (GB), IP Addresses, Fav</code>
+                                <code class="csv-format" id="importFormatCode">VM Name, Company, Host Type, Operating System, State, Node, CPU Count, Memory Used (GB), Memory Available (GB), Memory Total (GB), Disk Size (GB), Disk Used (GB), IP Addresses, Fav</code>
                             </details>
                         </div>
                     </div>
@@ -998,6 +1024,38 @@
                 </div>
             </div>
 
+            <!-- Alerts Page -->
+            <div id="alerts" class="page">
+                <div class="page-header">
+                    <div class="page-title">
+                        <h2>Alerts & Reconciliation</h2>
+                        <p class="page-description">Review lifecycle warnings, maintenance, DHCP/IPAM drift, and conflict fixes</p>
+                    </div>
+                </div>
+                <div class="alerts-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Inbox</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="alertsContent" class="alerts-list">
+                                <p class="empty-state">No alerts detected</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Reconciliation Issues</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="reconciliationContent" class="alerts-list">
+                                <p class="empty-state">No reconciliation issues detected</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Settings Page -->
             <div id="settings" class="page">
                 <div class="page-header">
@@ -1098,6 +1156,44 @@
                                 </div>
                                 <button class="btn-danger-outline btn-sm" onclick="clearAuditLog(); refreshSettingsPage();">Clear Log</button>
                             </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>RBAC</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="settings-item">
+                                <div class="settings-item-info">
+                                    <label>Enable RBAC</label>
+                                    <p class="help-text">Enforce viewer/operator/editor/admin roles on API writes in server mode.</p>
+                                </div>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="settingsRbacEnabled">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="form-row" style="margin-top: 16px;">
+                                <div class="form-group">
+                                    <label>Default Role</label>
+                                    <select id="settingsDefaultRole">
+                                        <option value="viewer">Viewer</option>
+                                        <option value="operator">Operator</option>
+                                        <option value="editor">Editor</option>
+                                        <option value="admin">Admin</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Current User Role</label>
+                                    <input type="text" id="settingsCurrentRole" readonly>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Role Assignments</label>
+                                <textarea id="settingsRoleAssignments" rows="6" placeholder="alice@example.com=admin&#10;bob@example.com=editor"></textarea>
+                                <span class="help-text">Use one <code>email=role</code> assignment per line.</span>
+                            </div>
+                            <button class="btn-primary" onclick="saveRBACSettings()">Save RBAC Settings</button>
                         </div>
                     </div>
                     <!-- About -->
@@ -1406,6 +1502,22 @@
                     <label>Description</label>
                     <textarea id="hostDescription" rows="2" placeholder="Brief description of the host..."></textarea>
                 </div>
+                <div class="form-section-title">Classification & Relationships</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Service / Application</label>
+                        <input type="text" id="hostServiceName" placeholder="e.g., Customer Portal">
+                    </div>
+                    <div class="form-group">
+                        <label>Tags</label>
+                        <input type="text" id="hostTags" placeholder="production, critical, pci">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Custom Fields</label>
+                    <textarea id="hostCustomFields" rows="3" placeholder="owner=platform-team&#10;environment=prod"></textarea>
+                    <span class="help-text">Enter one <code>key=value</code> pair per line.</span>
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Operating System</label>
@@ -1445,6 +1557,39 @@
                     <div class="form-group">
                         <label>Disk Used (GB)</label>
                         <input type="number" step="0.1" id="hostDiskUsed" placeholder="e.g., 250">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Rack / Location</label>
+                        <select id="hostLocationId"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>U Position</label>
+                        <input type="number" id="hostUPosition" placeholder="e.g., 12">
+                    </div>
+                    <div class="form-group">
+                        <label>U Height</label>
+                        <input type="number" id="hostUHeight" value="1" min="1" placeholder="e.g., 1">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>IPv6 Addresses (comma-separated)</label>
+                    <input type="text" id="hostIPv6Addresses" placeholder="e.g., 2001:db8::10, 2001:db8::11">
+                    <span class="help-text">Foundational IPv6 host tracking is available here even though IPv6 subnet planning is still future work.</span>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Depends On Hosts</label>
+                        <div id="hostDependencyHosts" class="checkbox-list"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Depends On Subnets</label>
+                        <div id="hostDependencySubnets" class="checkbox-list"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Depends On VLANs</label>
+                        <div id="hostDependencyVlans" class="checkbox-list"></div>
                     </div>
                 </div>
 
@@ -2343,6 +2488,8 @@
     <script src="modules/ip-range-manager.js"></script>
     <script src="modules/subnet-template-manager.js"></script>
     <script src="modules/conflict-detector.js"></script>
+    <script src="modules/reconciliation-manager.js"></script>
+    <script src="modules/alerts-manager.js"></script>
     <script src="modules/audit-log.js"></script>
     <script src="modules/settings.js"></script>
     <script src="modules/subnet-calculator.js"></script>
@@ -2355,6 +2502,8 @@
     <script src="modules/keyboard-shortcuts.js"></script>
     <script src="modules/context-menu.js"></script>
     <script src="modules/hardware-lifecycle.js"></script>
+    <script src="modules/permissions.js"></script>
+    <script src="modules/relationship-manager.js"></script>
     <script src="modules/company-manager.js"></script>
     <script src="modules/subnet-manager.js"></script>
     <script src="modules/ip-manager.js"></script>

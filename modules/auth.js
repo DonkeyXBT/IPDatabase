@@ -37,7 +37,7 @@ const Auth = {
                 badge.style.cssText = 'padding:4px 12px 8px;font-size:12px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
                 logo.parentNode.insertBefore(badge, logo.nextSibling);
             }
-            badge.textContent = this._user.displayName || this._user.email;
+            badge.textContent = `${this._user.displayName || this._user.email} (${this._user.role || 'viewer'})`;
             badge.title = this._user.email;
         }
     },

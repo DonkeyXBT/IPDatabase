@@ -35,6 +35,10 @@ const API = {
             window.location.href = '/auth/saml/login';
             throw new Error('Authentication required');
         }
+        if (res.status === 403) {
+            const err = await res.json().catch(() => ({ error: 'Insufficient permissions' }));
+            throw new Error(err.error || 'Insufficient permissions');
+        }
         if (!res.ok) {
             const err = await res.json().catch(() => ({ error: res.statusText }));
             throw new Error(err.error || err.message || 'API request failed');

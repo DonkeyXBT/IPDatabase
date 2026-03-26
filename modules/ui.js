@@ -12,7 +12,55 @@ function showToast(message, type = 'info') {
         toast.classList.remove('show');
     }, 3000);
 }
-function navigateTo(page) {
+let currentImportPreview = null;
+const PAGE_ROUTES = {
+    'dashboard': '/',
+    'companies': '/companies',
+    'vlans': '/vlans',
+    'subnets': '/subnets',
+    'hosts': '/hosts',
+    'ipam': '/ip-addresses',
+    'ip-ranges': '/ip-ranges',
+    'locations': '/locations',
+    'dhcp': '/dhcp',
+    'templates': '/templates',
+    'maintenance': '/maintenance',
+    'ip-history': '/ip-history',
+    'lifecycle': '/lifecycle',
+    'audit-log': '/audit-log',
+    'alerts': '/alerts',
+    'import': '/import',
+    'settings': '/settings'
+};
+const ROUTE_PAGES = Object.fromEntries(
+    Object.entries(PAGE_ROUTES).map(([page, route]) => [route, page])
+);
+function normalizeRoutePath(pathname) {
+    if (!pathname || pathname === '/') return '/';
+    return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+}
+function getRouteForPage(page) {
+    return PAGE_ROUTES[page] || PAGE_ROUTES.dashboard;
+}
+function getPageForRoute(pathname) {
+    const normalizedPath = normalizeRoutePath(pathname);
+    if (ROUTE_PAGES[normalizedPath]) return ROUTE_PAGES[normalizedPath];
+    if (normalizedPath === '/dashboard') return 'dashboard';
+    return 'dashboard';
+}
+function updatePageUrl(page, replace = false) {
+    const nextPath = getRouteForPage(page);
+    const currentPath = normalizeRoutePath(window.location.pathname);
+    if (currentPath === nextPath) return;
+    const method = replace ? 'replaceState' : 'pushState';
+    window.history[method]({ page }, '', nextPath);
+}
+function updateDocumentTitle(page) {
+    const label = document.querySelector(`.nav-item[data-page="${page}"] span`)?.textContent || 'Dashboard';
+    document.title = `${label} | OpenIPAM`;
+}
+function navigateTo(page, options = {}) {
+    const { updateHistory = true, replaceHistory = false } = options;
     document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === page);
     });
@@ -55,8 +103,17 @@ function navigateTo(page) {
         case 'settings':
             refreshSettingsPage();
             break;
+        case 'alerts':
+            refreshAlertsPage();
+            break;
     }
     updateSavedFiltersDropdown(page);
+    updateDocumentTitle(page);
+    if (updateHistory) {
+        updatePageUrl(page, replaceHistory);
+    } else if (replaceHistory) {
+        updatePageUrl(page, true);
+    }
 }
 function refreshCurrentPage() {
     const activePage = document.querySelector('.page.active');
@@ -612,14 +669,82 @@ function filterHosts() {
     });
 }
 function showAddHostModal() {
+    if (!Permissions.require('inventory.write')) return;
     document.getElementById('hostForm').reset();
     document.getElementById('hostEditId').value = '';
     populateCompanySelect('hostCompany');
     populateHostTypeSelect('hostType');
+    populateHostLocationSelect();
+    populateHostDependencyLists();
+    document.getElementById('hostUHeight').value = 1;
     document.querySelector('input[name="ipMethod"][value="auto"]').checked = true;
     toggleIPAssignment();
     document.querySelector('#addHostModal .modal-header h3').textContent = 'Add Host';
     openModal('addHostModal');
+}
+function populateHostLocationSelect(selectedId = '') {
+    const select = document.getElementById('hostLocationId');
+    if (!select) return;
+    const locations = LocationManager.getAll().filter(location => location.type === 'rack');
+    select.innerHTML = '<option value="">-- No Rack Assignment --</option>' +
+        locations.map(location => `<option value="${location.id}"${location.id === selectedId ? ' selected' : ''}>${escapeHtml(location.name)}${location.room ? ` (${escapeHtml(location.room)})` : ''}</option>`).join('');
+}
+function populateHostDependencyLists(selectedDependencies = []) {
+    const selected = new Set(selectedDependencies.map(dep => `${dep.type}:${dep.id}`));
+    const hostContainer = document.getElementById('hostDependencyHosts');
+    const subnetContainer = document.getElementById('hostDependencySubnets');
+    const vlanContainer = document.getElementById('hostDependencyVlans');
+    if (hostContainer) {
+        hostContainer.innerHTML = HostManager.getAll().map(host => `
+            <label class="checkbox-item">
+                <input type="checkbox" name="hostDependencyHost" value="${host.id}" ${selected.has(`host:${host.id}`) ? 'checked' : ''}>
+                <span>${escapeHtml(host.vmName)}</span>
+            </label>
+        `).join('');
+    }
+    if (subnetContainer) {
+        subnetContainer.innerHTML = SubnetManager.getAll().map(subnet => `
+            <label class="checkbox-item">
+                <input type="checkbox" name="hostDependencySubnet" value="${subnet.id}" ${selected.has(`subnet:${subnet.id}`) ? 'checked' : ''}>
+                <span>${escapeHtml(`${subnet.network}/${subnet.cidr}`)}</span>
+            </label>
+        `).join('');
+    }
+    if (vlanContainer) {
+        vlanContainer.innerHTML = VLANManager.getAll().map(vlan => `
+            <label class="checkbox-item">
+                <input type="checkbox" name="hostDependencyVlan" value="${vlan.id}" ${selected.has(`vlan:${vlan.id}`) ? 'checked' : ''}>
+                <span>${escapeHtml(`VLAN ${vlan.vlanId} ${vlan.name}`)}</span>
+            </label>
+        `).join('');
+    }
+}
+function parseCustomFieldsInput(value) {
+    const fields = {};
+    value.split('\n').map(line => line.trim()).filter(Boolean).forEach(line => {
+        const separatorIndex = line.indexOf('=');
+        if (separatorIndex === -1) return;
+        const key = line.slice(0, separatorIndex).trim();
+        const fieldValue = line.slice(separatorIndex + 1).trim();
+        if (key) fields[key] = fieldValue;
+    });
+    return fields;
+}
+function formatCustomFieldsForTextarea(fields = {}) {
+    return Object.entries(fields).map(([key, value]) => `${key}=${value}`).join('\n');
+}
+function collectHostDependencies() {
+    const dependencies = [];
+    document.querySelectorAll('input[name="hostDependencyHost"]:checked').forEach(input => {
+        dependencies.push({ type: 'host', id: input.value });
+    });
+    document.querySelectorAll('input[name="hostDependencySubnet"]:checked').forEach(input => {
+        dependencies.push({ type: 'subnet', id: input.value });
+    });
+    document.querySelectorAll('input[name="hostDependencyVlan"]:checked').forEach(input => {
+        dependencies.push({ type: 'vlan', id: input.value });
+    });
+    return dependencies;
 }
 function populateHostTypeSelect(selectId) {
     const select = document.getElementById(selectId);
@@ -672,14 +797,20 @@ function updateNextIPPreview() {
 }
 document.getElementById('hostAutoSubnet')?.addEventListener('change', updateNextIPPreview);
 function editHost(id) {
+    if (!Permissions.require('inventory.write')) return;
     const host = HostManager.getById(id);
     if (!host) return;
     populateCompanySelect('hostCompany');
     populateHostTypeSelect('hostType');
+    populateHostLocationSelect(host.locationId || '');
+    populateHostDependencyLists(host.dependencies || []);
     document.getElementById('hostCompany').value = host.companyId || '';
     document.getElementById('hostVMName').value = host.vmName || '';
     document.getElementById('hostType').value = host.hostType || 'virtual_machine';
     document.getElementById('hostDescription').value = host.description || '';
+    document.getElementById('hostServiceName').value = host.serviceName || '';
+    document.getElementById('hostTags').value = (host.tags || []).join(', ');
+    document.getElementById('hostCustomFields').value = formatCustomFieldsForTextarea(host.customFields || {});
     document.getElementById('hostSerialNumber').value = host.serialNumber || '';
     document.getElementById('hostOS').value = host.operatingSystem || '';
     document.getElementById('hostState').value = host.state || 'running';
@@ -689,6 +820,10 @@ function editHost(id) {
     document.getElementById('hostMemoryUsed').value = host.memoryUsedGB || '';
     document.getElementById('hostDiskSize').value = host.diskSizeGB || '';
     document.getElementById('hostDiskUsed').value = host.diskUsedGB || '';
+    document.getElementById('hostLocationId').value = host.locationId || '';
+    document.getElementById('hostUPosition').value = host.uPosition || '';
+    document.getElementById('hostUHeight').value = host.uHeight || 1;
+    document.getElementById('hostIPv6Addresses').value = (host.ipv6Addresses || []).join(', ');
     document.getElementById('hostFavorite').value = host.favorite ? '1' : '0';
     document.getElementById('hostEditId').value = id;
     document.querySelector('input[name="ipMethod"][value="none"]').checked = true;
@@ -698,12 +833,25 @@ function editHost(id) {
 }
 function saveHost(e) {
     e.preventDefault();
+    if (!Permissions.require('inventory.write')) return;
+    const ipv6Addresses = document.getElementById('hostIPv6Addresses').value
+        .split(',')
+        .map(ip => ip.trim())
+        .filter(Boolean);
+    const invalidIPv6 = ipv6Addresses.filter(ip => !IPUtils.isIPv6(ip));
+    if (invalidIPv6.length > 0) {
+        showToast(`Invalid IPv6 address(es): ${invalidIPv6.join(', ')}`, 'error');
+        return;
+    }
     const id = document.getElementById('hostEditId').value;
     const data = {
         companyId: document.getElementById('hostCompany').value || null,
         vmName: document.getElementById('hostVMName').value,
         hostType: document.getElementById('hostType').value || 'virtual_machine',
         description: document.getElementById('hostDescription').value,
+        serviceName: document.getElementById('hostServiceName').value,
+        tags: document.getElementById('hostTags').value.split(',').map(tag => tag.trim()).filter(Boolean),
+        customFields: parseCustomFieldsInput(document.getElementById('hostCustomFields').value),
         serialNumber: document.getElementById('hostSerialNumber').value,
         operatingSystem: document.getElementById('hostOS').value,
         state: document.getElementById('hostState').value,
@@ -713,8 +861,15 @@ function saveHost(e) {
         memoryUsedGB: document.getElementById('hostMemoryUsed').value,
         diskSizeGB: document.getElementById('hostDiskSize').value,
         diskUsedGB: document.getElementById('hostDiskUsed').value,
-        favorite: document.getElementById('hostFavorite').value === '1'
+        favorite: document.getElementById('hostFavorite').value === '1',
+        locationId: document.getElementById('hostLocationId').value || null,
+        uPosition: document.getElementById('hostUPosition').value || null,
+        uHeight: document.getElementById('hostUHeight').value || 1,
+        ipv6Addresses,
+        dependencies: collectHostDependencies()
     };
+    const selectedLocation = LocationManager.getById(data.locationId);
+    data.location = selectedLocation ? selectedLocation.name : '';
     if (data.memoryTotalGB && data.memoryUsedGB) {
         data.memoryAvailableGB = parseFloat(data.memoryTotalGB) - parseFloat(data.memoryUsedGB);
     }
@@ -743,6 +898,8 @@ function viewHost(id) {
     const host = HostManager.getById(id);
     if (!host) return;
     const details = document.getElementById('hostDetails');
+    const dependencyLabels = RelationshipManager.getDependencyLabels(host);
+    const customFields = Object.entries(host.customFields || {});
     details.innerHTML = `
         <div class="host-details-grid">
             <div class="detail-item">
@@ -776,6 +933,14 @@ function viewHost(id) {
                 <div class="value">${escapeHtml(host.description || '-')}</div>
             </div>
             <div class="detail-item">
+                <label>Service / Application</label>
+                <div class="value">${escapeHtml(host.serviceName || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <label>Tags</label>
+                <div class="value">${escapeHtml((host.tags || []).join(', ') || '-')}</div>
+            </div>
+            <div class="detail-item">
                 <label>Operating System</label>
                 <div class="value">${escapeHtml(host.operatingSystem || '-')}</div>
             </div>
@@ -803,6 +968,26 @@ function viewHost(id) {
                 <label>IP Addresses</label>
                 <div class="value" style="font-family: monospace;">${escapeHtml(host.ipAddresses || 'None assigned')}</div>
             </div>
+            <div class="detail-item full-width">
+                <label>IPv6 Addresses</label>
+                <div class="value" style="font-family: monospace;">${escapeHtml((host.ipv6Addresses || []).join(', ') || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <label>Rack / Location</label>
+                <div class="value">${escapeHtml(host.location || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <label>Rack Position</label>
+                <div class="value">${host.uPosition ? `U${host.uPosition} (${host.uHeight || 1}U)` : '-'}</div>
+            </div>
+            <div class="detail-item full-width">
+                <label>Dependencies</label>
+                <div class="value">${escapeHtml(dependencyLabels.join(', ') || '-')}</div>
+            </div>
+            <div class="detail-item full-width">
+                <label>Custom Fields</label>
+                <div class="value">${customFields.length > 0 ? customFields.map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(String(value))}`).join('<br>') : '-'}</div>
+            </div>
             <div class="detail-item">
                 <label>Created</label>
                 <div class="value">${host.createdAt ? new Date(host.createdAt).toLocaleString() : '-'}</div>
@@ -816,6 +1001,7 @@ function viewHost(id) {
     openModal('viewHostModal');
 }
 function deleteHost(id) {
+    if (!Permissions.require('inventory.write')) return;
     const host = HostManager.getById(id);
     if (!host) return;
     if (!confirm(`Delete host "${host.vmName}"? Its IPs will be released.`)) return;
@@ -1003,22 +1189,20 @@ function processCSVFile(file) {
         showToast('Please select a CSV file', 'error');
         return;
     }
+
     const reader = new FileReader();
     reader.onload = (e) => {
         const content = e.target.result;
-        const companyId = document.getElementById('importCompany').value || null;
-        const updateExisting = document.getElementById('updateExisting').checked;
-        const result = CSVManager.import(content, companyId, updateExisting);
         const status = document.getElementById('importStatus');
-        status.className = 'import-status success';
-        status.innerHTML = `
-            <strong>Import Complete!</strong><br>
-            Added: ${result.stats.added} | Updated: ${result.stats.updated} |
-            Skipped: ${result.stats.skipped} | Errors: ${result.stats.errors}
-            ${result.errors.length > 0 ? '<br><br>Errors:<br>' + result.errors.slice(0, 5).join('<br>') : ''}
-        `;
-        showToast(`Imported ${result.stats.added} hosts, updated ${result.stats.updated}`, 'success');
-        refreshDashboard();
+        const entity = document.getElementById('importEntity').value;
+        currentImportPreview = CSVManager.previewImport(entity, content, {
+            companyId: document.getElementById('importCompany').value || null,
+            updateExisting: document.getElementById('updateExisting').checked
+        });
+        status.className = 'import-status';
+        status.innerHTML = `<strong>Preview Ready</strong><br>${currentImportPreview.summary.create} create, ${currentImportPreview.summary.update} update, ${currentImportPreview.summary.invalid + currentImportPreview.summary.duplicate} invalid/duplicate`;
+        renderImportPreview(currentImportPreview);
+        showToast('Import preview generated', 'success');
     };
     reader.readAsText(file);
 }
@@ -1026,6 +1210,98 @@ function exportToCSV() {
     const csv = CSVManager.export();
     downloadFile(csv, 'ip_database_export.csv', 'text/csv');
     showToast('CSV exported successfully', 'success');
+}
+function downloadCSVTemplate() {
+    const entity = document.getElementById('importEntity')?.value || 'hosts';
+    const csv = CSVManager.exportTemplate(entity);
+    downloadFile(csv, `${entity}_import_template.csv`, 'text/csv');
+    showToast('CSV template downloaded', 'success');
+}
+function updateImportEntityUI() {
+    const entity = document.getElementById('importEntity')?.value || 'hosts';
+    const companyGroup = document.getElementById('importCompanyGroup');
+    const description = document.getElementById('importDescription');
+    const formatCode = document.getElementById('importFormatCode');
+    if (companyGroup) {
+        companyGroup.classList.toggle('import-company-hidden', entity !== 'hosts');
+    }
+    if (description) {
+        description.textContent = CSVManager.getImportDescription(entity);
+    }
+    if (formatCode) {
+        formatCode.textContent = CSVManager.getImportHeaders(entity).join(', ');
+    }
+    currentImportPreview = null;
+    renderImportPreview(null);
+}
+function renderImportPreview(preview) {
+    const container = document.getElementById('importPreview');
+    if (!container) return;
+    if (!preview) {
+        container.innerHTML = '';
+        return;
+    }
+
+    const previewHeaders = ['Record', 'Context 1', 'Context 2', 'Context 3'];
+    container.innerHTML = `
+        <div class="preview-summary">
+            <div class="preview-stat"><strong>${preview.summary.create}</strong><span>Create</span></div>
+            <div class="preview-stat"><strong>${preview.summary.update}</strong><span>Update</span></div>
+            <div class="preview-stat"><strong>${preview.summary.skip}</strong><span>Skip</span></div>
+            <div class="preview-stat"><strong>${preview.summary.invalid + preview.summary.duplicate}</strong><span>Invalid</span></div>
+        </div>
+        <div class="preview-table-wrapper">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Row</th>
+                        <th>Status</th>
+                        ${previewHeaders.map(header => `<th>${header}</th>`).join('')}
+                        <th>Validation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${preview.rows.map(row => `
+                        <tr>
+                            <td>${row.rowNumber}</td>
+                            <td><span class="preview-status ${row.action}">${row.action}</span></td>
+                            ${row.display.map(value => `<td>${escapeHtml(String(value || '-'))}</td>`).join('')}
+                            <td class="preview-messages">${escapeHtml(row.messages.join(' | ') || '-')}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div class="preview-actions">
+            <button type="button" class="btn-secondary" onclick="clearImportPreview()">Clear Preview</button>
+            <button type="button" class="btn-primary" onclick="commitCSVImport()" ${preview.canImport ? '' : 'disabled'}>Import Valid Rows</button>
+        </div>
+    `;
+}
+function clearImportPreview() {
+    currentImportPreview = null;
+    renderImportPreview(null);
+}
+function commitCSVImport() {
+    if (!Permissions.require('import.write')) return;
+    if (!currentImportPreview) {
+        showToast('No import preview available', 'error');
+        return;
+    }
+    const result = CSVManager.commitImport(currentImportPreview);
+    const status = document.getElementById('importStatus');
+    status.className = `import-status ${result.errors.length === 0 ? 'success' : ''}`;
+    status.innerHTML = `
+        <strong>Import Complete!</strong><br>
+        Created: ${result.stats.created} | Updated: ${result.stats.updated} |
+        Skipped: ${result.stats.skipped} | Invalid: ${result.stats.invalid} | Errors: ${result.stats.errors}
+        ${result.errors.length > 0 ? '<br><br>Errors:<br>' + result.errors.slice(0, 8).map(escapeHtml).join('<br>') : ''}
+    `;
+    currentImportPreview = null;
+    renderImportPreview(null);
+    refreshCurrentPage();
+    refreshDashboard();
+    showToast(`Import finished: ${result.stats.created} created, ${result.stats.updated} updated`, result.errors.length ? 'error' : 'success');
 }
 function backupDatabase() {
     const backup = {
@@ -1102,8 +1378,10 @@ function downloadFile(content, filename, mimeType) {
 function populateImportCompanySelect() {
     const companies = CompanyManager.getAll();
     const select = document.getElementById('importCompany');
+    if (!select) return;
     select.innerHTML = '<option value="">-- No Company --</option>' +
         companies.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    updateImportEntityUI();
 }
 function populateCompanySelect(selectId) {
     const companies = CompanyManager.getAll();
@@ -1918,7 +2196,8 @@ function navigateToExtended(page) {
     }
 }
 const originalNavigateTo = navigateTo;
-navigateTo = function(page) {
+navigateTo = function(page, options = {}) {
+    const { updateHistory = true, replaceHistory = false } = options;
     document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === page);
     });
@@ -1965,6 +2244,9 @@ navigateTo = function(page) {
         case 'settings':
             refreshSettingsPage();
             break;
+        case 'alerts':
+            refreshAlertsPage();
+            break;
         case 'maintenance':
             refreshMaintenanceTable();
             break;
@@ -1974,6 +2256,12 @@ navigateTo = function(page) {
         case 'lifecycle':
             refreshLifecycleDashboard();
             break;
+    }
+    updateDocumentTitle(page);
+    if (updateHistory) {
+        updatePageUrl(page, replaceHistory);
+    } else if (replaceHistory) {
+        updatePageUrl(page, true);
     }
 };
 const originalRefreshDashboard = refreshDashboard;
@@ -2045,6 +2333,44 @@ function refreshSettingsPage() {
 
     const logCountEl = document.getElementById('settingsLogCount');
     if (logCountEl) logCountEl.textContent = AuditLog.getAll(9999).length;
+
+    const rbacEnabledEl = document.getElementById('settingsRbacEnabled');
+    if (rbacEnabledEl) rbacEnabledEl.checked = !!Settings.get('rbacEnabled');
+    const defaultRoleEl = document.getElementById('settingsDefaultRole');
+    if (defaultRoleEl) defaultRoleEl.value = Settings.get('defaultUserRole') || 'admin';
+    const assignmentsEl = document.getElementById('settingsRoleAssignments');
+    if (assignmentsEl) {
+        const assignments = Settings.get('rbacAssignments') || {};
+        assignmentsEl.value = Object.entries(assignments).map(([email, role]) => `${email}=${role}`).join('\n');
+    }
+    const currentRoleEl = document.getElementById('settingsCurrentRole');
+    if (currentRoleEl) currentRoleEl.value = Permissions.getCurrentRole();
+}
+function saveRBACSettings() {
+    if (!Permissions.require('rbac.write')) return;
+    const enabled = document.getElementById('settingsRbacEnabled').checked;
+    const defaultRole = document.getElementById('settingsDefaultRole').value;
+    const assignments = {};
+    for (const line of document.getElementById('settingsRoleAssignments').value.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const separatorIndex = trimmed.indexOf('=');
+        if (separatorIndex === -1) {
+            showToast(`Invalid RBAC line: ${trimmed}`, 'error');
+            return;
+        }
+        const email = trimmed.slice(0, separatorIndex).trim().toLowerCase();
+        const role = trimmed.slice(separatorIndex + 1).trim();
+        if (!['viewer', 'operator', 'editor', 'admin'].includes(role)) {
+            showToast(`Invalid role "${role}"`, 'error');
+            return;
+        }
+        assignments[email] = role;
+    }
+    Settings.set('rbacEnabled', enabled);
+    Settings.set('defaultUserRole', defaultRole);
+    Settings.set('rbacAssignments', assignments);
+    showToast('RBAC settings saved', 'success');
 }
 function toggleSettingsDarkMode(checked) {
     Settings.set('darkMode', checked);
@@ -2351,6 +2677,7 @@ function refreshMaintenanceTable() {
         const startDate = new Date(mw.startTime);
         const endDate = new Date(mw.endTime);
         const duration = Math.round((endDate - startDate) / (1000 * 60 * 60 * 10)) / 10; 
+        const impact = RelationshipManager.getMaintenanceImpact(mw.hostIds || []);
         return `
             <tr class="${mw.isActive ? 'row-active' : ''} ${mw.isPast ? 'row-past' : ''}">
                 <td>
@@ -2360,6 +2687,7 @@ function refreshMaintenanceTable() {
                 </td>
                 <td>
                     <strong>${mw.title}</strong>
+                    ${mw.isGenerated ? `<br><small class="text-muted">Generated from recurring schedule</small>` : ''}
                     ${mw.description ? `<br><small class="text-muted">${mw.description}</small>` : ''}
                 </td>
                 <td>${startDate.toLocaleString()}</td>
@@ -2367,6 +2695,8 @@ function refreshMaintenanceTable() {
                 <td>
                     ${mw.affectedHostNames.length > 0 ? mw.affectedHostNames.slice(0, 3).join(', ') : '-'}
                     ${mw.affectedHostNames.length > 3 ? ` +${mw.affectedHostNames.length - 3} more` : ''}
+                    ${impact.dependentHosts.length > 0 ? `<br><small class="text-muted">Also impacts ${impact.dependentHosts.length} dependent host(s)</small>` : ''}
+                    ${impact.services.length > 0 ? `<br><small class="text-muted">Services: ${impact.services.map(escapeHtml).join(', ')}</small>` : ''}
                 </td>
                 <td>
                     <span class="status-badge" style="background: ${mw.statusColor}20; color: ${mw.statusColor}">
@@ -2375,22 +2705,24 @@ function refreshMaintenanceTable() {
                 </td>
                 <td>
                     <div class="action-buttons">
-                        ${mw.status === 'scheduled' ? `
+                        ${mw.status === 'scheduled' && !mw.isGenerated ? `
                             <button class="btn-icon" onclick="startMaintenance('${mw.id}')" title="Start">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                             </button>
                         ` : ''}
-                        ${mw.status === 'in_progress' ? `
+                        ${mw.status === 'in_progress' && !mw.isGenerated ? `
                             <button class="btn-icon" onclick="completeMaintenance('${mw.id}')" title="Complete">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
                             </button>
                         ` : ''}
-                        <button class="btn-icon" onclick="showEditMaintenanceModal('${mw.id}')" title="Edit">
+                        <button class="btn-icon" onclick="showEditMaintenanceModal('${mw.isGenerated ? mw.sourceWindowId : mw.id}')" title="${mw.isGenerated ? 'Edit Series' : 'Edit'}">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                         </button>
+                        ${!mw.isGenerated ? `
                         <button class="btn-icon btn-icon-danger" onclick="deleteMaintenance('${mw.id}')" title="Delete">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
                         </button>
+                        ` : ''}
                     </div>
                 </td>
             </tr>
@@ -2398,6 +2730,7 @@ function refreshMaintenanceTable() {
     }).join('');
 }
 function showAddMaintenanceModal() {
+    if (!Permissions.require('maintenance.write')) return;
     document.getElementById('maintenanceForm').reset();
     document.getElementById('maintenanceEditId').value = '';
     document.getElementById('maintenanceModalTitle').textContent = 'Schedule Maintenance';
@@ -2412,6 +2745,7 @@ function showAddMaintenanceModal() {
     openModal('addMaintenanceModal');
 }
 function showEditMaintenanceModal(id) {
+    if (!Permissions.require('maintenance.write')) return;
     const mw = MaintenanceManager.getById(id);
     if (!mw) return;
     document.getElementById('maintenanceEditId').value = id;
@@ -2445,6 +2779,7 @@ function populateMaintenanceHostList(selectedIds = []) {
 }
 function saveMaintenance(event) {
     event.preventDefault();
+    if (!Permissions.require('maintenance.write')) return;
     const editId = document.getElementById('maintenanceEditId').value;
     const selectedHosts = Array.from(document.querySelectorAll('input[name="maintenanceHosts"]:checked'))
         .map(cb => cb.value);
@@ -2476,6 +2811,7 @@ function saveMaintenance(event) {
     }
 }
 function startMaintenance(id) {
+    if (!Permissions.require('maintenance.write')) return;
     if (confirm('Start this maintenance window now?')) {
         MaintenanceManager.updateStatus(id, 'in_progress');
         showToast('Maintenance started', 'success');
@@ -2483,6 +2819,7 @@ function startMaintenance(id) {
     }
 }
 function completeMaintenance(id) {
+    if (!Permissions.require('maintenance.write')) return;
     if (confirm('Mark this maintenance as completed?')) {
         MaintenanceManager.updateStatus(id, 'completed');
         showToast('Maintenance completed', 'success');
@@ -2490,6 +2827,7 @@ function completeMaintenance(id) {
     }
 }
 function deleteMaintenance(id) {
+    if (!Permissions.require('maintenance.write')) return;
     if (confirm('Delete this maintenance window?')) {
         MaintenanceManager.delete(id);
         showToast('Maintenance deleted', 'success');
@@ -2695,6 +3033,148 @@ function refreshLifecycleDashboard() {
             </div>
         ` : ''}
     `;
+}
+function refreshAlertsPage() {
+    const alertsContainer = document.getElementById('alertsContent');
+    const reconciliationContainer = document.getElementById('reconciliationContent');
+    if (!alertsContainer || !reconciliationContainer) return;
+
+    const alerts = AlertsManager.getAll().filter(alert => alert.category !== 'reconciliation');
+    const reconciliationIssues = ReconciliationManager.getAllIssues();
+
+    alertsContainer.innerHTML = alerts.length === 0
+        ? '<p class="empty-state">No alerts detected</p>'
+        : alerts.map(renderAlertCard).join('');
+
+    reconciliationContainer.innerHTML = reconciliationIssues.length === 0
+        ? '<p class="empty-state">No reconciliation issues detected</p>'
+        : reconciliationIssues.map(renderReconciliationCard).join('');
+}
+function renderAlertCard(alert) {
+    return `
+        <div class="alert-card ${alert.severity}">
+            <div class="alert-header">
+                <div class="alert-title">${escapeHtml(alert.title)}</div>
+                <span class="alert-badge ${alert.severity}">${escapeHtml(alert.severity)}</span>
+            </div>
+            <div class="alert-detail">${escapeHtml(alert.detail || '')}</div>
+            ${renderAlertActions(alert)}
+        </div>
+    `;
+}
+function renderReconciliationCard(issue) {
+    const alert = {
+        severity: issue.severity,
+        title: issue.title,
+        detail: issue.detail,
+        actions: issue.actions || [],
+        issue
+    };
+    return renderAlertCard(alert);
+}
+function renderAlertActions(alert) {
+    if (!alert.actions || alert.actions.length === 0) return '';
+
+    const buttons = alert.actions.map(action => {
+        if (action === 'syncLease') {
+            return `<button class="btn-secondary" onclick="syncLeaseToIPAM('${alert.issue.data.id}')">Sync Lease</button>`;
+        }
+        if (action === 'syncReservation') {
+            return `<button class="btn-secondary" onclick="syncReservationToIPAM('${alert.issue.data.id}')">Sync Reservation</button>`;
+        }
+        if (action === 'dedupeIpRecords') {
+            return `<button class="btn-secondary" onclick="dedupeIPRecords('${alert.conflict.ipAddress}')">Merge Duplicate Records</button>`;
+        }
+        if (action === 'moveIpToDetectedSubnet') {
+            return `<button class="btn-secondary" onclick="moveIPToDetectedSubnet('${alert.conflict.ipAddress}')">Move To Correct Subnet</button>`;
+        }
+        if (action === 'reserveSpecialIp') {
+            return `<button class="btn-secondary" onclick="reserveSpecialIPAddress('${alert.conflict.ipAddress}')">Reserve Special IP</button>`;
+        }
+        return '';
+    }).join('');
+
+    return `<div class="alert-actions">${buttons}</div>`;
+}
+function syncLeaseToIPAM(leaseId) {
+    const result = ReconciliationManager.syncLeaseToIP(leaseId);
+    showToast(result.message, result.success ? 'success' : 'error');
+    refreshAlertsPage();
+    refreshIPsTable?.();
+}
+function syncReservationToIPAM(reservationId) {
+    const result = ReconciliationManager.syncReservationToIP(reservationId);
+    showToast(result.message, result.success ? 'success' : 'error');
+    refreshAlertsPage();
+    refreshIPsTable?.();
+}
+function dedupeIPRecords(ipAddress) {
+    const ips = DB.get(DB.KEYS.IPS).filter(ip => ip.ipAddress === ipAddress);
+    if (ips.length < 2) {
+        showToast('No duplicate IP records found', 'error');
+        return;
+    }
+
+    const allIPs = DB.get(DB.KEYS.IPS);
+    const sorted = [...ips].sort((a, b) => {
+        const aScore = a.status === 'assigned' && a.hostId ? 2 : a.status === 'reserved' ? 1 : 0;
+        const bScore = b.status === 'assigned' && b.hostId ? 2 : b.status === 'reserved' ? 1 : 0;
+        if (aScore !== bScore) return bScore - aScore;
+        return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
+    });
+
+    const keep = sorted[0];
+    const keepId = keep.id;
+    const filtered = allIPs.filter(ip => ip.ipAddress !== ipAddress || ip.id === keepId);
+    DB.set(DB.KEYS.IPS, filtered);
+    showToast(`Merged duplicate IP records for ${ipAddress}`, 'success');
+    refreshAlertsPage();
+    refreshIPsTable();
+}
+function moveIPToDetectedSubnet(ipAddress) {
+    const subnet = IPUtils.findSubnetForIP(ipAddress);
+    if (!subnet) {
+        showToast('No matching subnet found for this IP', 'error');
+        return;
+    }
+    const ips = DB.get(DB.KEYS.IPS);
+    const record = ips.find(ip => ip.ipAddress === ipAddress);
+    if (!record) {
+        showToast('IP record not found', 'error');
+        return;
+    }
+    record.subnetId = subnet.id;
+    record.updatedAt = new Date().toISOString();
+    DB.set(DB.KEYS.IPS, ips);
+    showToast(`Moved ${ipAddress} to ${subnet.network}/${subnet.cidr}`, 'success');
+    refreshAlertsPage();
+    refreshIPsTable();
+}
+function reserveSpecialIPAddress(ipAddress) {
+    const subnet = IPUtils.findSubnetForIP(ipAddress);
+    if (!subnet) {
+        showToast('No matching subnet found for this IP', 'error');
+        return;
+    }
+    const networkIP = subnet.network;
+    const broadcastIP = IPUtils.getBroadcastAddress(subnet.network, subnet.cidr);
+    const reservationType = ipAddress === networkIP ? 'network' : ipAddress === broadcastIP ? 'broadcast' : 'other';
+
+    IPManager.register(ipAddress, null, 'reserved');
+    const ips = DB.get(DB.KEYS.IPS);
+    const record = ips.find(ip => ip.ipAddress === ipAddress);
+    if (record) {
+        record.subnetId = subnet.id;
+        record.hostId = null;
+        record.status = 'reserved';
+        record.reservationType = reservationType;
+        record.reservationDescription = reservationType === 'network' ? 'Reserved network address' : 'Reserved broadcast address';
+        record.updatedAt = new Date().toISOString();
+        DB.set(DB.KEYS.IPS, ips);
+    }
+    showToast(`Reserved ${ipAddress} as a special subnet address`, 'success');
+    refreshAlertsPage();
+    refreshIPsTable();
 }
 function getLifecycleStatusBadge(host) {
     const status = HardwareLifecycle.getStatus(host);

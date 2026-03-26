@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import timedelta
 from flask import Flask, send_from_directory, jsonify, request, session, g
 from flask_cors import CORS
@@ -61,6 +62,47 @@ app.register_blueprint(auth_bp, url_prefix='/auth')
 # --- Authentication gate ---
 OPEN_PREFIXES = ('/auth/', '/api/v1/health')
 STATIC_EXTENSIONS = ('.css', '.js', '.png', '.jpg', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.wasm')
+ROLE_ORDER = {'viewer': 0, 'operator': 1, 'editor': 2, 'admin': 3}
+ADMIN_PATH_PREFIXES = ('/api/v1/settings', '/api/v1/backup')
+OPERATOR_PATH_PREFIXES = ('/api/v1/dhcp', '/api/v1/ips', '/api/v1/maintenance')
+EDITOR_PATH_PREFIXES = ('/api/v1/companies', '/api/v1/subnets', '/api/v1/hosts', '/api/v1/vlans', '/api/v1/ip_ranges', '/api/v1/locations', '/api/v1/templates', '/api/v1/saved_filters')
+
+
+def _load_rbac_settings():
+    db = get_db()
+    rows = db.execute('SELECT key, value FROM settings WHERE key IN (?, ?, ?)', ('rbacEnabled', 'rbacAssignments', 'defaultUserRole')).fetchall()
+    settings = {'rbacEnabled': False, 'rbacAssignments': {}, 'defaultUserRole': 'admin'}
+    for row in rows:
+        try:
+            settings[row['key']] = json.loads(row['value'])
+        except (json.JSONDecodeError, TypeError):
+            settings[row['key']] = row['value']
+    return settings
+
+
+def _get_role_for_user(user):
+    if not user:
+        return 'viewer'
+    settings = _load_rbac_settings()
+    if not settings.get('rbacEnabled'):
+        return 'admin'
+    assignments = settings.get('rbacAssignments') or {}
+    email = (user.get('email') or '').lower()
+    return assignments.get(email, settings.get('defaultUserRole') or 'viewer')
+
+
+def _required_role_for_request(path, method):
+    if method in ('GET', 'HEAD', 'OPTIONS'):
+        return 'viewer'
+    if any(path.startswith(prefix) for prefix in ADMIN_PATH_PREFIXES):
+        return 'admin'
+    if path == '/api/v1/audit_log' and method == 'DELETE':
+        return 'admin'
+    if any(path.startswith(prefix) for prefix in OPERATOR_PATH_PREFIXES):
+        return 'operator'
+    if any(path.startswith(prefix) for prefix in EDITOR_PATH_PREFIXES):
+        return 'editor'
+    return 'viewer'
 
 @app.before_request
 def require_login():
@@ -73,6 +115,7 @@ def require_login():
         return None
     # Set current user on g for downstream use
     g.current_user = session.get('user')
+    g.current_role = _get_role_for_user(g.current_user)
     # Allow static file requests through (fonts, css, js needed by login page)
     if any(path.endswith(ext) for ext in STATIC_EXTENSIONS):
         return None
@@ -83,6 +126,10 @@ def require_login():
             return jsonify({'error': 'Authentication required'}), 401
         # Page requests get login page
         return send_from_directory(FRONTEND_DIR, 'login.html')
+    if path.startswith('/api/'):
+        required_role = _required_role_for_request(path, request.method)
+        if ROLE_ORDER.get(g.current_role, 0) < ROLE_ORDER.get(required_role, 0):
+            return jsonify({'error': 'Insufficient permissions', 'requiredRole': required_role, 'currentRole': g.current_role}), 403
     return None
 
 

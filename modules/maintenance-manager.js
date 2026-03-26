@@ -1,6 +1,6 @@
 const MaintenanceManager = {
     getAll() {
-        const windows = DB.get(DB.KEYS.MAINTENANCE_WINDOWS);
+        const windows = this.materializeRecurringWindows(DB.get(DB.KEYS.MAINTENANCE_WINDOWS));
         const hosts = DB.get(DB.KEYS.HOSTS);
         const subnets = DB.get(DB.KEYS.SUBNETS);
         return windows.map(mw => {
@@ -29,8 +29,47 @@ const MaintenanceManager = {
             };
         }).sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
     },
+    materializeRecurringWindows(windows, occurrencesPerSeries = 6) {
+        const materialized = [...windows];
+        const now = new Date();
+
+        windows.forEach(window => {
+            if (!window.recurring || !window.recurringPattern || !window.startTime || !window.endTime) {
+                return;
+            }
+
+            let start = new Date(window.startTime);
+            let end = new Date(window.endTime);
+            let generated = 0;
+            let guard = 0;
+
+            while (generated < occurrencesPerSeries && guard < 50) {
+                guard++;
+                start = this._shiftByPattern(start, window.recurringPattern);
+                end = this._shiftByPattern(end, window.recurringPattern);
+                if (!start || !end) break;
+
+                if (start <= now) {
+                    continue;
+                }
+
+                materialized.push({
+                    ...window,
+                    id: `${window.id}__generated__${generated + 1}`,
+                    startTime: start.toISOString(),
+                    endTime: end.toISOString(),
+                    isGenerated: true,
+                    sourceWindowId: window.id,
+                    generatedOccurrence: generated + 1
+                });
+                generated++;
+            }
+        });
+
+        return materialized;
+    },
     getById(id) {
-        const windows = DB.get(DB.KEYS.MAINTENANCE_WINDOWS);
+        const windows = this.getAll();
         return windows.find(mw => mw.id === id);
     },
     getUpcoming(days = 7) {
@@ -157,5 +196,31 @@ const MaintenanceManager = {
             status: mw.status,
             color: MAINTENANCE_TYPES.find(t => t.id === mw.type)?.color || '#3b82f6'
         }));
+    },
+    _shiftByPattern(date, pattern) {
+        const next = new Date(date);
+        switch (pattern) {
+            case 'daily':
+                next.setDate(next.getDate() + 1);
+                break;
+            case 'weekly':
+                next.setDate(next.getDate() + 7);
+                break;
+            case 'biweekly':
+                next.setDate(next.getDate() + 14);
+                break;
+            case 'monthly':
+                next.setMonth(next.getMonth() + 1);
+                break;
+            case 'quarterly':
+                next.setMonth(next.getMonth() + 3);
+                break;
+            case 'yearly':
+                next.setFullYear(next.getFullYear() + 1);
+                break;
+            default:
+                return null;
+        }
+        return next;
     }
 };

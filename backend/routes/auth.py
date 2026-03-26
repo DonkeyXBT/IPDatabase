@@ -3,6 +3,7 @@ import json
 from flask import Blueprint, request, session, redirect, jsonify, make_response, g
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
+from database import get_db
 
 bp = Blueprint('auth', __name__)
 
@@ -59,6 +60,34 @@ def _init_saml_auth():
     req = _prepare_flask_request()
     settings = _load_saml_settings()
     return OneLogin_Saml2_Auth(req, settings)
+
+
+def _get_role_for_email(email):
+    if not email:
+        return 'viewer'
+    db = get_db()
+    enabled_row = db.execute('SELECT value FROM settings WHERE key = ?', ('rbacEnabled',)).fetchone()
+    if enabled_row:
+        try:
+            if not json.loads(enabled_row['value']):
+                return 'admin'
+        except (json.JSONDecodeError, TypeError):
+            pass
+    row = db.execute('SELECT value FROM settings WHERE key = ?', ('rbacAssignments',)).fetchone()
+    assignments = {}
+    if row:
+        try:
+            assignments = json.loads(row['value'])
+        except (json.JSONDecodeError, TypeError):
+            assignments = {}
+    default_row = db.execute('SELECT value FROM settings WHERE key = ?', ('defaultUserRole',)).fetchone()
+    default_role = 'admin'
+    if default_row:
+        try:
+            default_role = json.loads(default_row['value'])
+        except (json.JSONDecodeError, TypeError):
+            default_role = default_row['value']
+    return assignments.get(email.lower(), default_role or 'admin')
 
 
 @bp.route('/saml/login')
@@ -172,4 +201,6 @@ def get_user():
     user = session.get('user')
     if not user:
         return jsonify({'error': 'Not authenticated'}), 401
+    user = dict(user)
+    user['role'] = _get_role_for_email(user.get('email'))
     return jsonify(user)

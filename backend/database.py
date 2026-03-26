@@ -70,6 +70,11 @@ CREATE_TABLES_SQL = [
         locationId TEXT,
         uPosition INTEGER,
         uHeight INTEGER,
+        serviceName TEXT,
+        ipv6Addresses TEXT,
+        tags TEXT,
+        customFields TEXT,
+        dependencies TEXT,
         createdAt TEXT,
         updatedAt TEXT
     )""",
@@ -258,6 +263,18 @@ def _run_migrations(db):
         db.execute('ALTER TABLE audit_log ADD COLUMN userId TEXT')
     if 'userName' not in columns:
         db.execute('ALTER TABLE audit_log ADD COLUMN userName TEXT')
+
+    host_columns = [row[1] for row in db.execute("PRAGMA table_info(hosts)").fetchall()]
+    if 'serviceName' not in host_columns:
+        db.execute('ALTER TABLE hosts ADD COLUMN serviceName TEXT')
+    if 'ipv6Addresses' not in host_columns:
+        db.execute('ALTER TABLE hosts ADD COLUMN ipv6Addresses TEXT')
+    if 'tags' not in host_columns:
+        db.execute('ALTER TABLE hosts ADD COLUMN tags TEXT')
+    if 'customFields' not in host_columns:
+        db.execute('ALTER TABLE hosts ADD COLUMN customFields TEXT')
+    if 'dependencies' not in host_columns:
+        db.execute('ALTER TABLE hosts ADD COLUMN dependencies TEXT')
 
 
 def init_db():

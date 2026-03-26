@@ -2,7 +2,10 @@ const Settings = {
     defaults: {
         darkMode: false,
         compactView: false,
-        showAuditLog: true
+        showAuditLog: true,
+        rbacEnabled: false,
+        defaultUserRole: 'admin',
+        rbacAssignments: {}
     },
     get(key) {
         const settings = this.getAll();
